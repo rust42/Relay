@@ -17,6 +17,16 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Tuist
         run: brew install --quiet tuist
+      - name: Stub the Rust-generated bindings
+        # rust-core/generated/ is gitignored — it's normally produced by
+        # scripts/build-rust.sh as an Xcode pre-build step, which doesn't run
+        # for `tuist generate` on its own. This job only checks the Tuist
+        # manifest itself (the Bazel job below does the real Rust build), so
+        # a placeholder is enough to satisfy Tuist's source-glob and library
+        # dependency validation at generate time.
+        run: |
+          mkdir -p rust-core/generated/swift
+          touch rust-core/generated/swift/module.modulemap
       - name: Generate Xcode project
         run: tuist generate --no-open
 
