@@ -16,7 +16,7 @@ import AppKit
 
 struct LocalMocksView: View {
     @EnvironmentObject var proxyModel: ProxyModel
-    @State private var selectedRuleID: String?
+    @Binding var selectedRuleID: String?
 
     private var selectedRule: MockRuleDisplay? {
         selectedRuleID.flatMap { id in proxyModel.mockRules.first { $0.id == id } }
@@ -40,7 +40,7 @@ struct LocalMocksView: View {
 
 struct MapLocalToolView: View {
     @EnvironmentObject var proxyModel: ProxyModel
-    @State private var selectedRuleID: String?
+    @Binding var selectedRuleID: String?
 
     private var selectedRule: MapLocalRuleDisplay? {
         selectedRuleID.flatMap { id in proxyModel.mapLocalRules.first { $0.id == id } }
@@ -64,7 +64,7 @@ struct MapLocalToolView: View {
 
 struct MapRemoteToolView: View {
     @EnvironmentObject var proxyModel: ProxyModel
-    @State private var selectedRuleID: String?
+    @Binding var selectedRuleID: String?
 
     private var selectedRule: MapRemoteRuleDisplay? {
         selectedRuleID.flatMap { id in proxyModel.mapRemoteRules.first { $0.id == id } }
@@ -88,7 +88,7 @@ struct MapRemoteToolView: View {
 
 struct RewriteToolView: View {
     @EnvironmentObject var proxyModel: ProxyModel
-    @State private var selectedRuleID: String?
+    @Binding var selectedRuleID: String?
 
     private var selectedRule: RewriteRuleDisplay? {
         selectedRuleID.flatMap { id in proxyModel.rewriteRules.first { $0.id == id } }
@@ -112,7 +112,7 @@ struct RewriteToolView: View {
 
 struct BlockListToolView: View {
     @EnvironmentObject var proxyModel: ProxyModel
-    @State private var selectedRuleID: String?
+    @Binding var selectedRuleID: String?
 
     private var selectedRule: BlockRuleDisplay? {
         selectedRuleID.flatMap { id in proxyModel.blockRules.first { $0.id == id } }
@@ -136,7 +136,7 @@ struct BlockListToolView: View {
 
 struct DnsSpoofingToolView: View {
     @EnvironmentObject var proxyModel: ProxyModel
-    @State private var selectedRuleID: String?
+    @Binding var selectedRuleID: String?
 
     private var selectedRule: DnsSpoofRuleDisplay? {
         selectedRuleID.flatMap { id in proxyModel.dnsSpoofRules.first { $0.id == id } }

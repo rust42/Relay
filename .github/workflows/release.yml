@@ -29,19 +29,19 @@ jobs:
           repository-cache: true
 
       - name: Build universal (arm64 + x86_64) app, ad-hoc signed
-        run: bazel build //Swift/CharlesRSApp:CharlesRS --macos_cpus=arm64,x86_64 -c opt
+        run: bazel build //Swift/RelayApp:Relay --macos_cpus=arm64,x86_64 -c opt
 
       - name: Package
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME:-dev}"
           STAGE="$(mktemp -d)"
-          unzip -q bazel-bin/Swift/CharlesRSApp/CharlesRS.zip -d "$STAGE"
-          codesign -dv "$STAGE/CharlesRS.app"
+          unzip -q bazel-bin/Swift/RelayApp/Relay.zip -d "$STAGE"
+          codesign -dv "$STAGE/Relay.app"
           DIST="$PWD/dist"
           mkdir -p "$DIST"
-          ditto -c -k --sequesterRsrc --keepParent "$STAGE/CharlesRS.app" "$DIST/CharlesRS-$VERSION-macos-universal.zip"
-          echo "ARTIFACT=$DIST/CharlesRS-$VERSION-macos-universal.zip" >> "$GITHUB_ENV"
+          ditto -c -k --sequesterRsrc --keepParent "$STAGE/Relay.app" "$DIST/Relay-$VERSION-macos-universal.zip"
+          echo "ARTIFACT=$DIST/Relay-$VERSION-macos-universal.zip" >> "$GITHUB_ENV"
 
       - name: Create GitHub Release
         env:
@@ -55,7 +55,7 @@ jobs:
           fi
           gh release create "$TAG" "$ARTIFACT" \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "CharlesRS $TAG" \
+            --title "Relay $TAG" \
             --generate-notes \
-            --notes "Ad-hoc signed build, no Apple Developer team. Gatekeeper will warn on first launch (right-click > Open, or \`xattr -d com.apple.quarantine CharlesRS.app\`)." \
+            --notes "Ad-hoc signed build, no Apple Developer team. Gatekeeper will warn on first launch (right-click > Open, or \`xattr -d com.apple.quarantine Relay.app\`)." \
             $([ "${GITHUB_REF_TYPE}" = "tag" ] || echo "--prerelease")

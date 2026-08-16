@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # Builds rust-core for macOS (arm64 + x86_64), lipos into a universal
 # static lib, and regenerates the Swift/UniFFI bindings consumed by the
-# Xcode project. Run manually, or via the Xcode preBuildScript in
-# project.yml.
+# Xcode project. Run manually, or via the pre-build script wired up in
+# Project.swift.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -32,22 +32,22 @@ cargo build --release --target x86_64-apple-darwin
 mkdir -p "$OUT_DIR"
 echo "==> lipo into universal static lib"
 lipo -create \
-  "target/aarch64-apple-darwin/release/libcharles_core.a" \
-  "target/x86_64-apple-darwin/release/libcharles_core.a" \
-  -output "$OUT_DIR/libcharles_core.a"
+  "target/aarch64-apple-darwin/release/librelay_core.a" \
+  "target/x86_64-apple-darwin/release/librelay_core.a" \
+  -output "$OUT_DIR/librelay_core.a"
 
 echo "==> generating Swift bindings via uniffi-bindgen"
 mkdir -p "$GEN_DIR"
 # uniffi-bindgen cannot extract members from a fat (lipo) .a archive,
 # so run it against one architecture slice instead (any valid slice will do).
 cargo run --bin uniffi-bindgen -- generate \
-  --library "target/aarch64-apple-darwin/release/libcharles_core.a" \
+  --library "target/aarch64-apple-darwin/release/librelay_core.a" \
   --language swift \
   --out-dir "$GEN_DIR"
 
-# Swift resolves `import charles_coreFFI` via module.modulemap on the include
+# Swift resolves `import relay_coreFFI` via module.modulemap on the include
 # path, so mirror the generated modulemap under that name.
-command cp -f "$GEN_DIR/charles_coreFFI.modulemap" "$GEN_DIR/module.modulemap"
+command cp -f "$GEN_DIR/relay_coreFFI.modulemap" "$GEN_DIR/module.modulemap"
 
-echo "==> done. Universal lib: $OUT_DIR/libcharles_core.a"
+echo "==> done. Universal lib: $OUT_DIR/librelay_core.a"
 echo "    Swift bindings:     $GEN_DIR"

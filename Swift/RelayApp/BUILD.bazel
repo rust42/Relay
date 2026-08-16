@@ -2,12 +2,12 @@ load("@build_bazel_rules_apple//apple:macos.bzl", "macos_application")
 load("@build_bazel_rules_swift//swift:swift_library.bzl", "swift_library")
 
 swift_library(
-    name = "CharlesRSLib",
-    srcs = glob(["*.swift"]) + ["//rust-core:generated/swift/charles_core.swift"],
-    module_name = "CharlesRS",
+    name = "RelayLib",
+    srcs = glob(["*.swift"]) + ["//rust-core:generated/swift/relay_core.swift"],
+    module_name = "Relay",
     deps = [
-        "//rust-core:charles_core_static",
-        "//rust-core:charles_coreFFI",
+        "//rust-core:relay_core_static",
+        "//rust-core:relay_coreFFI",
     ],
     linkopts = [
         "-framework",
@@ -19,11 +19,11 @@ swift_library(
 )
 
 macos_application(
-    name = "CharlesRS",
-    bundle_id = "com.sandeep.charlesrs.app",
-    entitlements = "CharlesRS.entitlements",
+    name = "Relay",
+    bundle_id = "com.sandeep.relay.app",
+    entitlements = "Relay.entitlements",
     infoplists = ["//bazel:Info.plist"],
     minimum_os_version = "14.0",
-    deps = [":CharlesRSLib"],
+    deps = [":RelayLib"],
     visibility = ["//visibility:public"],
 )

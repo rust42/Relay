@@ -1,7 +1,7 @@
-"""CharlesRS: Bazel build (CI). Local dev uses Tuist; see Project.swift."""
+"""Relay: Bazel build (CI). Local dev uses Tuist; see Project.swift."""
 
 module(
-    name = "charlesrs",
+    name = "relay",
     version = "0.1.0",
 )
 

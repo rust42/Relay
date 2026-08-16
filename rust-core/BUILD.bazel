@@ -14,15 +14,15 @@ genrule(
         "Cargo.lock",
     ]),
     outs = [
-        "target/universal/libcharles_core.a",
-        "generated/swift/charles_core.swift",
-        "generated/swift/charles_coreFFI.h",
+        "target/universal/librelay_core.a",
+        "generated/swift/relay_core.swift",
+        "generated/swift/relay_coreFFI.h",
     ],
     cmd = """
         $(execpath //bazel:build_rust_core.sh) \
-            $(RULEDIR)/target/universal/libcharles_core.a \
-            $(RULEDIR)/generated/swift/charles_core.swift \
-            $(RULEDIR)/generated/swift/charles_coreFFI.h
+            $(RULEDIR)/target/universal/librelay_core.a \
+            $(RULEDIR)/generated/swift/relay_core.swift \
+            $(RULEDIR)/generated/swift/relay_coreFFI.h
     """,
     tools = ["//bazel:build_rust_core.sh"],
     tags = [
@@ -35,20 +35,20 @@ genrule(
 )
 
 cc_library(
-    name = "charles_coreFFI",
-    hdrs = ["generated/swift/charles_coreFFI.h"],
-    aspect_hints = [":charles_coreFFI_interop_hint"],
+    name = "relay_coreFFI",
+    hdrs = ["generated/swift/relay_coreFFI.h"],
+    aspect_hints = [":relay_coreFFI_interop_hint"],
     visibility = ["//visibility:public"],
 )
 
 swift_interop_hint(
-    name = "charles_coreFFI_interop_hint",
-    module_name = "charles_coreFFI",
+    name = "relay_coreFFI_interop_hint",
+    module_name = "relay_coreFFI",
 )
 
 cc_library(
-    name = "charles_core_static",
-    srcs = ["target/universal/libcharles_core.a"],
+    name = "relay_core_static",
+    srcs = ["target/universal/librelay_core.a"],
     linkstatic = True,
     alwayslink = True,
     visibility = ["//visibility:public"],

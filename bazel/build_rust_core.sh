@@ -4,7 +4,7 @@
 # regenerates the UniFFI Swift bindings, then copies the results to the
 # exact paths Bazel expects for the genrule's declared `outs`.
 #
-# Args: <out-lib.a> <out-charles_core.swift> <out-charles_coreFFI.h>
+# Args: <out-lib.a> <out-relay_core.swift> <out-relay_coreFFI.h>
 set -euo pipefail
 
 # Resolve to absolute paths up front: they're relative to Bazel's execroot
@@ -40,20 +40,20 @@ cargo build --release --target x86_64-apple-darwin
 echo "==> lipo into universal static lib"
 mkdir -p "$(dirname "$OUT_LIB")"
 lipo -create \
-  "target/aarch64-apple-darwin/release/libcharles_core.a" \
-  "target/x86_64-apple-darwin/release/libcharles_core.a" \
+  "target/aarch64-apple-darwin/release/librelay_core.a" \
+  "target/x86_64-apple-darwin/release/librelay_core.a" \
   -output "$OUT_LIB"
 
 echo "==> generating Swift bindings via uniffi-bindgen"
 GEN_TMP="$(mktemp -d)"
 cargo run --bin uniffi-bindgen -- generate \
-  --library "target/aarch64-apple-darwin/release/libcharles_core.a" \
+  --library "target/aarch64-apple-darwin/release/librelay_core.a" \
   --language swift \
   --out-dir "$GEN_TMP"
 
 mkdir -p "$(dirname "$OUT_SWIFT")" "$(dirname "$OUT_HEADER")"
-cp "$GEN_TMP/charles_core.swift" "$OUT_SWIFT"
-cp "$GEN_TMP/charles_coreFFI.h" "$OUT_HEADER"
+cp "$GEN_TMP/relay_core.swift" "$OUT_SWIFT"
+cp "$GEN_TMP/relay_coreFFI.h" "$OUT_HEADER"
 rm -rf "$GEN_TMP"
 
 echo "==> done"

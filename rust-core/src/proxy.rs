@@ -16,8 +16,8 @@
 use crate::cert::CertAuthority;
 use crate::interceptor;
 use crate::model::{
-    BlockRule, CapturedRequest, DnsSpoofRule, FocusSettings, HeaderPair, MapLocalRule, MapRemoteRule, MockRule,
-    RewriteAction, RewriteRule, ThrottleProfile,
+    AnalyticsEvent, BlockRule, CapturedRequest, DnsSpoofRule, FocusSettings, HeaderPair, MapLocalRule, MapRemoteRule,
+    MockRule, PipelineRule, PipelineStep, RewriteAction, RewriteRule, ThrottleProfile,
 };
 use base64::Engine;
 use http_body_util::{BodyExt, Full};
@@ -35,6 +35,7 @@ use rustls::{ClientConfig, RootCertStore, ServerConfig};
 use std::collections::HashMap;
 use std::convert::Infallible;
 use std::io::Read as _;
+use std::path::PathBuf;
 use std::sync::{Arc, OnceLock};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -70,6 +71,7 @@ type SharedRewrite = Arc<Mutex<Vec<RewriteRule>>>;
 type SharedBlock = Arc<Mutex<Vec<BlockRule>>>;
 type SharedDnsSpoof = Arc<Mutex<Vec<DnsSpoofRule>>>;
 type SharedFocus = Arc<Mutex<FocusSettings>>;
+type SharedPipelines = Arc<Mutex<Vec<PipelineRule>>>;
 type SharedThrottle = Arc<Mutex<ThrottleProfile>>;
 type HttpsClient = Client<hyper_rustls::HttpsConnector<hyper_util::client::legacy::connect::HttpConnector>, Full<Bytes>>;
 
@@ -90,7 +92,10 @@ pub struct ProxyEngine {
     block_rules: SharedBlock,
     dns_spoof_rules: SharedDnsSpoof,
     focus: SharedFocus,
+    pipeline_rules: SharedPipelines,
     throttle: SharedThrottle,
+    /// Where Analytics events get appended — see `record_analytics_event`.
+    analytics_path: PathBuf,
     client: HttpsClient,
     /// Per-host rustls configs, so we only build the acceptor once per host.
     tls_configs: Mutex<HashMap<String, Arc<ServerConfig>>>,
@@ -107,7 +112,9 @@ impl ProxyEngine {
         block_rules: SharedBlock,
         dns_spoof_rules: SharedDnsSpoof,
         focus: SharedFocus,
+        pipeline_rules: SharedPipelines,
         throttle: SharedThrottle,
+        analytics_path: PathBuf,
     ) -> Self {
         // rustls 0.23 requires a process-wide crypto provider. Installing
         // twice is not an error for us — another component may have won
@@ -131,7 +138,9 @@ impl ProxyEngine {
             block_rules,
             dns_spoof_rules,
             focus,
+            pipeline_rules,
             throttle,
+            analytics_path,
             client,
             tls_configs: Mutex::new(HashMap::new()),
         }
@@ -231,6 +240,14 @@ impl ProxyEngine {
     /// First enabled DNS Spoof rule whose host pattern matches, if any.
     fn matching_dns_spoof(&self, host: &str) -> Option<DnsSpoofRule> {
         self.dns_spoof_rules.lock().iter().find(|r| r.enabled && host.contains(&r.host)).cloned()
+    }
+
+    /// All enabled pipelines — unlike the other rule types there's no
+    /// cheap host/path prefilter here, since a pipeline's own filter steps
+    /// (which can check host, path, *or* method) are what decide whether
+    /// it applies.
+    fn matching_pipelines(&self) -> Vec<PipelineRule> {
+        self.pipeline_rules.lock().iter().filter(|r| r.enabled).cloned().collect()
     }
 
     /// Whether a request to `host` should be recorded under the current
@@ -490,6 +507,55 @@ impl ProxyEngine {
             }
         }
 
+        // --- Pipelines (Scripting) ---
+        // Each enabled pipeline is a linear list of filter/action steps.
+        // Filters gate whether the rest of that pipeline's steps run.
+        // Everything up to the first response-only step (status filter,
+        // response header/body edits, status override) runs now, against
+        // the request; the remaining steps resume after the response comes
+        // back — see the second pass further down. A pipeline whose
+        // request-side filters fail is dropped entirely; its response-side
+        // steps never run either. This means request steps (filters, then
+        // header injection) must come before response steps in a
+        // pipeline's step list — the editor UI enforces that ordering.
+        let pipelines = self.matching_pipelines();
+        let mut active_pipelines: Vec<(PipelineRule, usize)> = Vec::new();
+        'pipelines: for rule in pipelines {
+            let mut i = 0;
+            while i < rule.steps.len() {
+                if is_response_step(&rule.steps[i]) {
+                    break;
+                }
+                match &rule.steps[i] {
+                    PipelineStep::FilterHostContains { value } => {
+                        if !target_host.contains(value.as_str()) {
+                            continue 'pipelines;
+                        }
+                    }
+                    PipelineStep::FilterPathContains { value } => {
+                        if !target.path().contains(value.as_str()) {
+                            continue 'pipelines;
+                        }
+                    }
+                    PipelineStep::FilterMethod { method: m } => {
+                        if !method.eq_ignore_ascii_case(m) {
+                            continue 'pipelines;
+                        }
+                    }
+                    PipelineStep::AddRequestHeader { name, value } => {
+                        if let (Ok(n), Ok(v)) = (HeaderName::from_bytes(name.as_bytes()), value.parse()) {
+                            request_headers.append(n, v);
+                        }
+                    }
+                    _ => unreachable!("response-only steps are caught by is_response_step above"),
+                }
+                i += 1;
+            }
+            if i < rule.steps.len() {
+                active_pipelines.push((rule, i));
+            }
+        }
+
         let (req_body_b64, req_body_truncated) =
             encode_body(&decompressed_for_display(&request_headers, &req_body));
 
@@ -676,6 +742,82 @@ impl ProxyEngine {
                     intercepted_by = Some(match intercepted_by.take() {
                         Some(existing) => format!("{existing}, Rewrite: {}", rule.display_name),
                         None => format!("Rewrite: {}", rule.display_name),
+                    });
+                }
+            }
+
+            if body_touched {
+                if let Some(text) = body_text {
+                    let bytes = Bytes::from(text);
+                    client_bytes = bytes.clone();
+                    display_bytes = bytes;
+                }
+            }
+        }
+
+        // --- Pipelines (Scripting), response phase ---
+        // Resumes each active pipeline from the first response-only step
+        // found during the request phase above. A failed `FilterResponseStatus`
+        // stops the rest of *that* pipeline (request-side header additions
+        // already applied stay applied — only what's left in this pipeline
+        // is skipped). Runs after Rewrite, on top of whatever it produced.
+        if !active_pipelines.is_empty() {
+            let wants_body_edit = active_pipelines.iter().any(|(rule, start)| {
+                rule.steps[*start..].iter().any(|s| matches!(s, PipelineStep::ReplaceResponseBodyText { .. }))
+            });
+            let mut body_text = if wants_body_edit { String::from_utf8(display_bytes.to_vec()).ok() } else { None };
+            let mut body_touched = false;
+
+            for (rule, start) in &active_pipelines {
+                let mut rule_applied = false;
+                for step in &rule.steps[*start..] {
+                    match step {
+                        PipelineStep::FilterResponseStatus { status } => {
+                            if effective_status.as_u16() != *status {
+                                break;
+                            }
+                        }
+                        PipelineStep::AddResponseHeader { name, value } => {
+                            if let (Ok(n), Ok(v)) = (HeaderName::from_bytes(name.as_bytes()), value.parse()) {
+                                effective_headers.append(n, v);
+                                rule_applied = true;
+                            }
+                        }
+                        PipelineStep::SetResponseStatus { status } => {
+                            if let Ok(code) = StatusCode::from_u16(*status) {
+                                effective_status = code;
+                                rule_applied = true;
+                            }
+                        }
+                        PipelineStep::ReplaceResponseBodyText { find, replace } => {
+                            if let Some(text) = &mut body_text {
+                                if text.contains(find.as_str()) {
+                                    *text = text.replace(find.as_str(), replace.as_str());
+                                    rule_applied = true;
+                                    body_touched = true;
+                                }
+                            }
+                        }
+                        // Request-only steps aren't supposed to appear at
+                        // or after `start` — the editor UI keeps request
+                        // steps before response steps. But this rule's JSON
+                        // lives on disk and is user-editable, so a
+                        // hand-edited or malformed ordering is reachable in
+                        // practice, not just in theory. A stray request
+                        // step here has no meaningful response-phase
+                        // action, so it's a deliberate no-op rather than a
+                        // panic that would take down the whole proxy over
+                        // one bad rule.
+                        PipelineStep::FilterHostContains { .. }
+                        | PipelineStep::FilterPathContains { .. }
+                        | PipelineStep::FilterMethod { .. }
+                        | PipelineStep::AddRequestHeader { .. } => {}
+                    }
+                }
+                if rule_applied {
+                    intercepted_by = Some(match intercepted_by.take() {
+                        Some(existing) => format!("{existing}, Pipeline: {}", rule.display_name),
+                        None => format!("Pipeline: {}", rule.display_name),
                     });
                 }
             }
@@ -1008,6 +1150,17 @@ impl ProxyEngine {
     }
 
     fn record(&self, req: CapturedRequest) {
+        let event = AnalyticsEvent {
+            timestamp_ms: req.started_at_ms,
+            method: req.method.clone(),
+            host: req.url.parse::<Uri>().ok().and_then(|u| u.host().map(str::to_string)).unwrap_or_default(),
+            status_code: req.status_code,
+            duration_ms: req.duration_ms,
+            bytes_sent: req.bytes_sent,
+            bytes_received: req.bytes_received,
+        };
+        record_analytics_event(self.analytics_path.clone(), event);
+
         let mut store = self.store.lock();
         if store.len() >= MAX_STORED_REQUESTS {
             let overflow = store.len() - MAX_STORED_REQUESTS + 1;
@@ -1015,6 +1168,39 @@ impl ProxyEngine {
         }
         store.push(req);
     }
+}
+
+/// Cap on the Analytics log's on-disk size — checked (cheaply, via
+/// metadata) on every append, but the expensive rewrite-to-trim only runs
+/// on the rare append that actually crosses the threshold.
+const ANALYTICS_LOG_MAX_BYTES: u64 = 8 * 1024 * 1024;
+const ANALYTICS_LOG_KEEP_LINES: usize = 50_000;
+
+/// Appends one compact JSON line for Analytics. Offloaded via
+/// `spawn_blocking` rather than done inline — `record` runs directly in the
+/// async request path, and blocking a tokio worker thread on disk I/O for
+/// every single request would be exactly the kind of self-inflicted
+/// bottleneck this app's own Instruments walkthroughs would call out.
+fn record_analytics_event(path: PathBuf, event: AnalyticsEvent) {
+    tokio::task::spawn_blocking(move || {
+        let Ok(line) = serde_json::to_string(&event) else { return };
+        {
+            use std::io::Write;
+            let Ok(mut file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) else { return };
+            let _ = writeln!(file, "{line}");
+        }
+        if std::fs::metadata(&path).map(|m| m.len()).unwrap_or(0) > ANALYTICS_LOG_MAX_BYTES {
+            trim_analytics_log(&path);
+        }
+    });
+}
+
+fn trim_analytics_log(path: &std::path::Path) {
+    let Ok(content) = std::fs::read_to_string(path) else { return };
+    let lines: Vec<&str> = content.lines().collect();
+    let keep_from = lines.len().saturating_sub(ANALYTICS_LOG_KEEP_LINES);
+    let trimmed = lines[keep_from..].join("\n");
+    let _ = std::fs::write(path, trimmed + "\n");
 }
 
 /// Resolve which local process owns the loopback connection using
@@ -1187,6 +1373,18 @@ fn client_tls_config() -> Arc<ClientConfig> {
             )
         })
         .clone()
+}
+
+/// Whether a `PipelineStep` needs the response to evaluate/apply — these
+/// can only run after the fetch, never before.
+fn is_response_step(step: &PipelineStep) -> bool {
+    matches!(
+        step,
+        PipelineStep::FilterResponseStatus { .. }
+            | PipelineStep::AddResponseHeader { .. }
+            | PipelineStep::ReplaceResponseBodyText { .. }
+            | PipelineStep::SetResponseStatus { .. }
+    )
 }
 
 /// Rebuilds `target`'s scheme/host/port per `rule`, keeping the original

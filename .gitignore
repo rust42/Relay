@@ -21,7 +21,7 @@ bazel-*
 /bazel-bin
 /bazel-out
 /bazel-testlogs
-/bazel-CharlesRS
+/bazel-relay
 .bazel-cache/
 
 # CI / build artifacts

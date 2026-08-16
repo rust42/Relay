@@ -2,9 +2,9 @@ import SwiftUI
 import AppKit
 
 @main
-struct CharlesRSApp: App {
+struct RelayApp: App {
     // Owns the single Rust-side controller for the app's lifetime.
-    // `CharlesController` comes from the UniFFI-generated bindings
+    // `RelayController` comes from the UniFFI-generated bindings
     // (rust-core/generated/swift), built by scripts/build-rust.sh.
     @StateObject private var proxyModel = ProxyModel()
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate

@@ -157,6 +157,57 @@ pub struct RewriteRule {
     pub actions: Vec<RewriteAction>,
 }
 
+/// A compact, cross-session record of one exchange — everything Analytics
+/// needs (timing, status, size, host) and nothing it doesn't (no headers,
+/// no bodies). Kept deliberately separate from `CapturedRequest`: that one
+/// lives in memory only and is wiped on stop/quit, while this is appended
+/// to disk on every request so historical trends survive restarts without
+/// paying the storage cost of persisting every captured body forever.
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct AnalyticsEvent {
+    pub timestamp_ms: i64,
+    pub method: String,
+    pub host: String,
+    pub status_code: Option<u16>,
+    pub duration_ms: Option<i64>,
+    pub bytes_sent: u64,
+    pub bytes_received: u64,
+}
+
+/// One step in a `PipelineRule`. Filter steps gate whether later steps in
+/// the same pipeline run; the rest are actions. Request-side steps
+/// (filters on host/path/method, request header injection) must run before
+/// any response-side step (status filter, response header/body edits,
+/// status override) in a pipeline's step list — see the doc comment on
+/// pipeline execution in `proxy.rs` for exactly why and what that means in
+/// practice.
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Enum)]
+pub enum PipelineStep {
+    FilterHostContains { value: String },
+    FilterPathContains { value: String },
+    FilterMethod { method: String },
+    AddRequestHeader { name: String, value: String },
+    FilterResponseStatus { status: u16 },
+    AddResponseHeader { name: String, value: String },
+    ReplaceResponseBodyText { find: String, replace: String },
+    SetResponseStatus { status: u16 },
+}
+
+/// Charles/Proxyman-style "visual scripting": an ordered, no-code chain of
+/// filters and actions that runs against live traffic. Delivered as a
+/// linear step sequence (see `PipelineStep`) rather than a free-form
+/// drag-and-drop 2D node graph with wires — that interaction model is a
+/// much larger, gesture-heavy UI undertaking; this keeps the actual
+/// "chain filters + header injection + body modifiers" capability the
+/// description promises without it.
+#[derive(Debug, Clone, Serialize, Deserialize, uniffi::Record)]
+pub struct PipelineRule {
+    pub id: String,
+    pub display_name: String,
+    pub enabled: bool,
+    pub steps: Vec<PipelineStep>,
+}
+
 /// Refuses matching requests outright instead of forwarding them —
 /// Charles/Proxyman's "Block List". A match never touches the network; the
 /// client gets `status_code` immediately.

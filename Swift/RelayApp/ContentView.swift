@@ -36,10 +36,8 @@ enum AppSection: String, CaseIterable, Identifiable {
     case analytics = "Analytics"
     var id: String { rawValue }
 
-    /// Everything except Scripting/Analytics has landed. Traffic and the
-    /// six rule engines (formerly grouped under one "Mocks" item) are flat,
-    /// first-class sidebar entries now — each one click away.
-    var isAvailable: Bool { self != .scripting && self != .analytics }
+    /// Everything has landed — Scripting and Analytics were the last two.
+    var isAvailable: Bool { true }
 
     var icon: String {
         switch self {
@@ -56,14 +54,6 @@ enum AppSection: String, CaseIterable, Identifiable {
         case .analytics: return "chart.xyaxis.line"
         }
     }
-
-    var comingSoonDescription: String {
-        switch self {
-        case .scripting: return "A visual node canvas — chain filters, header injection, and body modifiers into a rule pipeline that runs against live traffic, no code required."
-        case .analytics: return "Historical latency, error rate, and throughput trends once requests are persisted across sessions rather than just the current capture."
-        default: return ""
-        }
-    }
 }
 
 struct ContentView: View {
@@ -78,6 +68,18 @@ struct ContentView: View {
     @State private var groupByApp = false
     @FocusState private var searchFocused: Bool
 
+    // Owned here (rather than inside each tool view) so a right-click
+    // "quick rule" action from the traffic list can jump straight to the
+    // newly created rule — the tool view it lands on just renders whatever
+    // id this holds instead of managing its own selection.
+    @State private var selectedLocalMockID: String?
+    @State private var selectedMapLocalID: String?
+    @State private var selectedMapRemoteID: String?
+    @State private var selectedRewriteID: String?
+    @State private var selectedBlockID: String?
+    @State private var selectedDnsSpoofID: String?
+    @State private var selectedPipelineID: String?
+
     private var visibleRequests: [CapturedRequestDisplay] {
         proxyModel.requests.filter { req in
             let matchesText = filterText.isEmpty
@@ -91,6 +93,34 @@ struct ContentView: View {
 
     private var selectedRequest: CapturedRequestDisplay? {
         selectedRequestID.flatMap { id in proxyModel.requests.first { $0.id == id } }
+    }
+
+    /// Right-click "quick rule" entry point: creates a new rule prefilled
+    /// from `request`'s host/path in whichever tool `section` names, then
+    /// navigates there with that rule already selected — so the tool the
+    /// user picked from the context menu is what they land on, ready to
+    /// finish configuring (pick a file, set a target host, whatever's left).
+    private func handleQuickRule(_ section: AppSection, _ request: CapturedRequestDisplay) {
+        let hp = request.hostAndPath
+        selectedSection = section
+        switch section {
+        case .localMocks:
+            selectedLocalMockID = proxyModel.addMockRule(host: hp.host, path: hp.path)
+        case .mapLocal:
+            selectedMapLocalID = proxyModel.addMapLocalRule(host: hp.host, path: hp.path)
+        case .mapRemote:
+            selectedMapRemoteID = proxyModel.addMapRemoteRule(host: hp.host, path: hp.path)
+        case .rewrite:
+            selectedRewriteID = proxyModel.addRewriteRule(host: hp.host, path: hp.path)
+        case .blockList:
+            selectedBlockID = proxyModel.addBlockRule(host: hp.host, path: hp.path)
+        case .dnsSpoofing:
+            selectedDnsSpoofID = proxyModel.addDnsSpoofRule(host: hp.host)
+        case .scripting:
+            selectedPipelineID = proxyModel.addPipelineRule(host: hp.host)
+        default:
+            break
+        }
     }
 
     var body: some View {
@@ -114,23 +144,25 @@ struct ContentView: View {
                         case .traffic:
                             trafficContent
                         case .localMocks:
-                            LocalMocksView()
+                            LocalMocksView(selectedRuleID: $selectedLocalMockID)
                         case .mapLocal:
-                            MapLocalToolView()
+                            MapLocalToolView(selectedRuleID: $selectedMapLocalID)
                         case .mapRemote:
-                            MapRemoteToolView()
+                            MapRemoteToolView(selectedRuleID: $selectedMapRemoteID)
                         case .rewrite:
-                            RewriteToolView()
+                            RewriteToolView(selectedRuleID: $selectedRewriteID)
                         case .blockList:
-                            BlockListToolView()
+                            BlockListToolView(selectedRuleID: $selectedBlockID)
                         case .dnsSpoofing:
-                            DnsSpoofingToolView()
+                            DnsSpoofingToolView(selectedRuleID: $selectedDnsSpoofID)
                         case .focus:
                             FocusToolView()
                         case .tools:
                             ToolsView()
-                        default:
-                            ComingSoonView(section: selectedSection)
+                        case .scripting:
+                            PipelineToolView(selectedRuleID: $selectedPipelineID)
+                        case .analytics:
+                            AnalyticsView()
                         }
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -139,7 +171,7 @@ struct ContentView: View {
             .padding(14)
         }
         .toolbar(.hidden, for: .windowToolbar)
-        .alert("CharlesRS", isPresented: Binding(
+        .alert("Relay", isPresented: Binding(
             get: { proxyModel.errorMessage != nil },
             set: { if !$0 { proxyModel.errorMessage = nil } }
         )) {
@@ -159,7 +191,8 @@ struct ContentView: View {
                     selectedRequestID: $selectedRequestID,
                     sortColumn: $sortColumn,
                     sortAscending: $sortAscending,
-                    groupByApp: $groupByApp
+                    groupByApp: $groupByApp,
+                    onQuickRule: handleQuickRule
                 )
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
 
@@ -190,16 +223,13 @@ struct SidebarNav: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 8, style: .continuous)
-                    .fill(Theme.accent)
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
                     .frame(width: 32, height: 32)
-                    .overlay(
-                        Image(systemName: "bolt.horizontal.circle.fill")
-                            .font(.system(size: 15))
-                            .foregroundStyle(.white)
-                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
                 VStack(alignment: .leading, spacing: 1) {
-                    Text("CharlesRS")
+                    Text("Relay")
                         .font(.system(size: 14, weight: .bold))
                         .foregroundStyle(Theme.textPrimary)
                     Text("Traffic Inspector")
@@ -283,39 +313,6 @@ struct NavRow: View {
     }
 }
 
-struct ComingSoonView: View {
-    let section: AppSection
-
-    var body: some View {
-        VStack(spacing: 14) {
-            ZStack {
-                Circle()
-                    .fill(Theme.accentGradient.opacity(0.18))
-                    .frame(width: 76, height: 76)
-                    .blur(radius: 8)
-                Image(systemName: section.icon)
-                    .font(.system(size: 28, weight: .light))
-                    .foregroundStyle(Theme.accentGradient)
-            }
-            VStack(spacing: 6) {
-                HStack(spacing: 6) {
-                    Text(section.rawValue)
-                        .font(.system(size: 15, weight: .semibold, design: .rounded))
-                        .foregroundStyle(Theme.textPrimary)
-                    Chip(text: "COMING SOON", color: Theme.accent3)
-                }
-                Text(section.comingSoonDescription)
-                    .font(.system(size: 12))
-                    .foregroundStyle(Theme.textSecondary)
-                    .multilineTextAlignment(.center)
-                    .frame(maxWidth: 360)
-            }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .glassPanel(cornerRadius: 10)
-    }
-}
-
 // MARK: - Top bar
 
 struct TopBar: View {
@@ -338,10 +335,12 @@ struct TopBar: View {
             Color.clear.frame(width: 62, height: 1)
 
             HStack(spacing: 6) {
-                Image(systemName: "bolt.horizontal.circle.fill")
-                    .font(.system(size: 17))
-                    .foregroundStyle(Theme.accentGradient)
-                Text("CharlesRS")
+                Image(nsImage: NSApp.applicationIconImage)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(width: 20, height: 20)
+                    .clipShape(RoundedRectangle(cornerRadius: 5, style: .continuous))
+                Text("Relay")
                     .font(.system(size: 14, weight: .bold, design: .rounded))
                     .foregroundStyle(Theme.textPrimary)
             }
@@ -681,6 +680,7 @@ struct RequestListPanel: View {
     @Binding var sortColumn: SortColumn?
     @Binding var sortAscending: Bool
     @Binding var groupByApp: Bool
+    let onQuickRule: (AppSection, CapturedRequestDisplay) -> Void
 
     private var sortedRequests: [CapturedRequestDisplay] {
         requests.sorted(by: sortColumn, ascending: sortAscending)
@@ -754,6 +754,16 @@ struct RequestListPanel: View {
                 withAnimation(.spring(response: 0.3, dampingFraction: 0.8)) {
                     selectedRequestID = req.id
                 }
+            }
+            .contextMenu {
+                Button { onQuickRule(.mapLocal, req) } label: { Label("Map Local…", systemImage: "doc.badge.arrow.up") }
+                Button { onQuickRule(.mapRemote, req) } label: { Label("Map Remote…", systemImage: "arrow.triangle.swap") }
+                Button { onQuickRule(.rewrite, req) } label: { Label("Rewrite…", systemImage: "pencil.line") }
+                Button { onQuickRule(.localMocks, req) } label: { Label("Local Mock…", systemImage: "point.3.connected.trianglepath.dotted") }
+                Divider()
+                Button { onQuickRule(.blockList, req) } label: { Label("Block…", systemImage: "nosign") }
+                Button { onQuickRule(.dnsSpoofing, req) } label: { Label("DNS Spoof…", systemImage: "globe.badge.chevron.backward") }
+                Button { onQuickRule(.scripting, req) } label: { Label("New Pipeline…", systemImage: "chevron.left.forwardslash.chevron.right") }
             }
     }
 

@@ -12,11 +12,11 @@ import os.log
 /// updated remote endpoint, or via the newer proxy-flow rewrite APIs) to
 /// 127.0.0.1:<proxyPort>, where rust-core's ProxyEngine is listening.
 final class FilterDataProvider: NEFilterDataProvider {
-    private let log = Logger(subsystem: "com.sandeep.charlesrs.filter", category: "filter")
+    private let log = Logger(subsystem: "com.sandeep.relay.filter", category: "filter")
 
     override func startFilter(completionHandler: @escaping (Error?) -> Void) {
         // TODO: load the currently-enabled bundle ID list from shared
-        // UserDefaults (App Group), populated by CharlesRSApp via the
+        // UserDefaults (App Group), populated by RelayApp via the
         // filter picker UI.
         completionHandler(nil)
     }

@@ -38,12 +38,12 @@ jobs:
           disk-cache: ${{ github.workflow }}
           repository-cache: true
 
-      - name: bazel build //Swift/CharlesRSApp:CharlesRS
-        run: bazel build //Swift/CharlesRSApp:CharlesRS
+      - name: bazel build //Swift/RelayApp:Relay
+        run: bazel build //Swift/RelayApp:Relay
 
       - name: Smoke-check the app bundle
         run: |
-          rm -rf /tmp/CharlesRS-check
-          mkdir -p /tmp/CharlesRS-check
-          unzip -q bazel-bin/Swift/CharlesRSApp/CharlesRS.zip -d /tmp/CharlesRS-check
-          codesign -dv /tmp/CharlesRS-check/CharlesRS.app
+          rm -rf /tmp/Relay-check
+          mkdir -p /tmp/Relay-check
+          unzip -q bazel-bin/Swift/RelayApp/Relay.zip -d /tmp/Relay-check
+          codesign -dv /tmp/Relay-check/Relay.app

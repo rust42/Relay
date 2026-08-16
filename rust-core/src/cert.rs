@@ -39,8 +39,8 @@ impl CertAuthority {
     pub fn generate() -> anyhow::Result<Self> {
         let mut params = CertificateParams::new(Vec::<String>::new())?;
         let mut dn = DistinguishedName::new();
-        dn.push(DnType::CommonName, "CharlesRS Root CA");
-        dn.push(DnType::OrganizationName, "CharlesRS (local dev)");
+        dn.push(DnType::CommonName, "Relay Root CA");
+        dn.push(DnType::OrganizationName, "Relay (local dev)");
         params.distinguished_name = dn;
         params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
         params.key_usages = vec![
@@ -65,8 +65,8 @@ impl CertAuthority {
     /// run. Persistence matters: the user trusts this cert once in Keychain,
     /// so regenerating it per launch would break every launch after the first.
     pub fn load_or_generate(dir: &std::path::Path) -> anyhow::Result<Self> {
-        let cert_path = dir.join("charlesrs-ca.pem");
-        let key_path = dir.join("charlesrs-ca.key.pem");
+        let cert_path = dir.join("relay-ca.pem");
+        let key_path = dir.join("relay-ca.key.pem");
 
         if cert_path.exists() && key_path.exists() {
             let cert_pem = std::fs::read_to_string(&cert_path)?;

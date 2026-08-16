@@ -44,7 +44,7 @@ enum RoutingMode: String {
     case systemWide
 }
 
-/// Thin ObservableObject wrapper around the Rust `CharlesController`.
+/// Thin ObservableObject wrapper around the Rust `RelayController`.
 /// Bridges Rust's pull-based `recentRequests(limit:)` into something
 /// SwiftUI can observe, and owns install/trust of the root CA plus routing
 /// (either selected-apps-only via browser relaunch, or system-wide).
@@ -69,23 +69,24 @@ final class ProxyModel: ObservableObject {
     @Published private(set) var dnsSpoofRules: [DnsSpoofRuleDisplay] = []
     @Published private(set) var focusEnabled = false
     @Published private(set) var focusHosts: [String] = []
+    @Published private(set) var pipelineRules: [PipelineRuleDisplay] = []
     @Published private(set) var throttlePreset: ThrottlePreset = .off
 
     let port: UInt16 = 8899
 
-    private let controller: CharlesController
+    private let controller: RelayController
     private var pollTask: Task<Void, Never>?
 
-    private static let routingModeKey = "CharlesRS.routingMode"
-    private static let proxiedBundleIDsKey = "CharlesRS.proxiedBundleIDs"
+    private static let routingModeKey = "Relay.routingMode"
+    private static let proxiedBundleIDsKey = "Relay.proxiedBundleIDs"
 
     init() {
         let support = FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("CharlesRS", isDirectory: true)
+            .appendingPathComponent("Relay", isDirectory: true)
         try? FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
 
-        controller = CharlesController(dataDir: support.path)
+        controller = RelayController(dataDir: support.path)
 
         let defaults = UserDefaults.standard
         routingMode = defaults.string(forKey: Self.routingModeKey).flatMap(RoutingMode.init) ?? .selectedApps
@@ -100,6 +101,7 @@ final class ProxyModel: ObservableObject {
         let focus = controller.focus()
         focusEnabled = focus.enabled
         focusHosts = focus.hosts
+        pipelineRules = controller.pipelineRules().map(PipelineRuleDisplay.init)
     }
 
     /// Path of the root CA on disk, handy for `curl --cacert` and for the
@@ -107,7 +109,7 @@ final class ProxyModel: ObservableObject {
     var rootCAPath: String {
         FileManager.default
             .urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("CharlesRS/charlesrs-ca.pem")
+            .appendingPathComponent("Relay/relay-ca.pem")
             .path
     }
 
@@ -219,7 +221,7 @@ final class ProxyModel: ObservableObject {
     /// so `importSession()` can reopen it exactly as it looked when saved.
     func exportSession() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "charlesrs-session.json"
+        panel.nameFieldStringValue = "relay-session.json"
         panel.allowedContentTypes = [.json]
         guard panel.runModal() == .OK, let url = panel.url else { return }
 
@@ -275,12 +277,12 @@ final class ProxyModel: ObservableObject {
     /// Creates a new disabled rule with a starter script and returns its id
     /// so the caller can select it immediately.
     @discardableResult
-    func addMockRule() -> String {
+    func addMockRule(host: String = "", path: String = "") -> String {
         let rule = MockRuleDisplay(
             id: UUID().uuidString,
-            displayName: "New Rule",
+            displayName: host.isEmpty ? "New Rule" : host,
             method: nil,
-            urlContains: "",
+            urlContains: host + path,
             enabled: false,
             script: MockRuleDisplay.defaultScript,
             lastError: nil
@@ -322,12 +324,12 @@ final class ProxyModel: ObservableObject {
     /// Creates a new disabled Map Local rule and returns its id so the
     /// caller can select it immediately.
     @discardableResult
-    func addMapLocalRule() -> String {
+    func addMapLocalRule(host: String = "", path: String = "") -> String {
         let rule = MapLocalRuleDisplay(
             id: UUID().uuidString,
-            displayName: "New Rule",
+            displayName: host.isEmpty ? "New Rule" : host,
             method: nil,
-            urlContains: "",
+            urlContains: host + path,
             enabled: false,
             localPath: "",
             contentType: nil,
@@ -367,13 +369,13 @@ final class ProxyModel: ObservableObject {
     /// Creates a new disabled Map Remote rule and returns its id so the
     /// caller can select it immediately.
     @discardableResult
-    func addMapRemoteRule() -> String {
+    func addMapRemoteRule(host: String = "", path: String = "") -> String {
         let rule = MapRemoteRuleDisplay(
             id: UUID().uuidString,
-            displayName: "New Rule",
+            displayName: host.isEmpty ? "New Rule" : host,
             enabled: false,
-            matchHost: "",
-            matchPathContains: "",
+            matchHost: host,
+            matchPathContains: path,
             targetScheme: "http",
             targetHost: "localhost",
             targetPort: nil
@@ -412,13 +414,13 @@ final class ProxyModel: ObservableObject {
     /// Creates a new disabled Rewrite rule with one starter action and
     /// returns its id so the caller can select it immediately.
     @discardableResult
-    func addRewriteRule() -> String {
+    func addRewriteRule(host: String = "", path: String = "") -> String {
         let rule = RewriteRuleDisplay(
             id: UUID().uuidString,
-            displayName: "New Rule",
+            displayName: host.isEmpty ? "New Rule" : host,
             enabled: false,
-            hostContains: "",
-            pathContains: "",
+            hostContains: host,
+            pathContains: path,
             actions: [RewriteActionDraft()]
         )
         rewriteRules.append(rule)
@@ -455,8 +457,8 @@ final class ProxyModel: ObservableObject {
     /// Creates a new disabled Block rule and returns its id so the caller
     /// can select it immediately.
     @discardableResult
-    func addBlockRule() -> String {
-        let rule = BlockRuleDisplay(id: UUID().uuidString, displayName: "New Rule", enabled: false, hostContains: "", pathContains: "", statusCode: 403)
+    func addBlockRule(host: String = "", path: String = "") -> String {
+        let rule = BlockRuleDisplay(id: UUID().uuidString, displayName: host.isEmpty ? "New Rule" : host, enabled: false, hostContains: host, pathContains: path, statusCode: 403)
         blockRules.append(rule)
         persistBlockRules()
         return rule.id
@@ -491,8 +493,8 @@ final class ProxyModel: ObservableObject {
     /// Creates a new disabled DNS Spoof rule and returns its id so the
     /// caller can select it immediately.
     @discardableResult
-    func addDnsSpoofRule() -> String {
-        let rule = DnsSpoofRuleDisplay(id: UUID().uuidString, displayName: "New Rule", enabled: false, host: "", spoofIp: "127.0.0.1")
+    func addDnsSpoofRule(host: String = "") -> String {
+        let rule = DnsSpoofRuleDisplay(id: UUID().uuidString, displayName: host.isEmpty ? "New Rule" : host, enabled: false, host: host, spoofIp: "127.0.0.1")
         dnsSpoofRules.append(rule)
         persistDnsSpoofRules()
         return rule.id
@@ -552,6 +554,58 @@ final class ProxyModel: ObservableObject {
         Task.detached(priority: .utility) {
             controller.setFocus(settings: settings)
         }
+    }
+
+    /// Creates a new disabled pipeline with one starter filter step and
+    /// returns its id so the caller can select it immediately.
+    @discardableResult
+    func addPipelineRule(host: String = "") -> String {
+        let rule = PipelineRuleDisplay(
+            id: UUID().uuidString,
+            displayName: host.isEmpty ? "New Pipeline" : host,
+            enabled: false,
+            steps: [PipelineStepDraft(kind: .filterHostContains, value: host)]
+        )
+        pipelineRules.append(rule)
+        persistPipelineRules()
+        return rule.id
+    }
+
+    func updatePipelineRule(_ rule: PipelineRuleDisplay) {
+        guard let index = pipelineRules.firstIndex(where: { $0.id == rule.id }) else { return }
+        pipelineRules[index] = rule
+        persistPipelineRules()
+    }
+
+    func deletePipelineRule(id: String) {
+        pipelineRules.removeAll { $0.id == id }
+        persistPipelineRules()
+    }
+
+    func togglePipelineRule(id: String) {
+        guard let index = pipelineRules.firstIndex(where: { $0.id == id }) else { return }
+        pipelineRules[index].enabled.toggle()
+        persistPipelineRules()
+    }
+
+    /// Same live-update mechanism as `persistMockRules`.
+    private func persistPipelineRules() {
+        let rules = pipelineRules.map { $0.toFFI() }
+        let controller = self.controller
+        Task.detached(priority: .utility) {
+            controller.setPipelineRules(rules: rules)
+        }
+    }
+
+    /// Reads back Analytics' cross-session event log. Not cached on
+    /// `ProxyModel` — the dashboard fetches on appear/refresh rather than
+    /// this being kept live in sync, since it's historical trend data, not
+    /// something that needs to update mid-keystroke like the traffic list.
+    func fetchAnalyticsEvents(limit: Int = 20_000) async -> [AnalyticsEventDisplay] {
+        let controller = self.controller
+        return await Task.detached(priority: .utility) {
+            controller.analyticsEvents(limit: UInt32(limit)).map(AnalyticsEventDisplay.init)
+        }.value
     }
 
     /// Applies a Network Link Conditioner preset. Takes effect immediately
@@ -947,7 +1001,7 @@ struct MockRuleDisplay: Identifiable, Equatable, Sendable {
         data.mocked = true;
 
         res.body = JSON.stringify(data);
-        res.headers["X-Mocked-By"] = "CharlesRS";
+        res.headers["X-Mocked-By"] = "Relay";
         return res;
     }
     """
@@ -1231,5 +1285,168 @@ struct DnsSpoofRuleDisplay: Identifiable, Equatable, Sendable {
 
     func toFFI() -> DnsSpoofRule {
         DnsSpoofRule(id: id, displayName: displayName, enabled: enabled, host: host, spoofIp: spoofIp)
+    }
+}
+
+/// Which of `PipelineStep`'s eight shapes a `PipelineStepDraft` currently
+/// represents — drives which fields the step editor shows, and whether it's
+/// a filter (gates the rest of the pipeline) or an action.
+enum PipelineStepKind: String, CaseIterable, Identifiable {
+    case filterHostContains = "Filter: Host Contains"
+    case filterPathContains = "Filter: Path Contains"
+    case filterMethod = "Filter: Method"
+    case addRequestHeader = "Add Request Header"
+    case filterResponseStatus = "Filter: Response Status"
+    case addResponseHeader = "Add Response Header"
+    case replaceResponseBodyText = "Replace Response Body Text"
+    case setResponseStatus = "Set Response Status"
+    var id: String { rawValue }
+
+    var isFilter: Bool {
+        switch self {
+        case .filterHostContains, .filterPathContains, .filterMethod, .filterResponseStatus: return true
+        default: return false
+        }
+    }
+
+    /// Steps that can only run once a response exists — everything else
+    /// must come before these in a pipeline's step list.
+    var isResponsePhase: Bool {
+        switch self {
+        case .filterResponseStatus, .addResponseHeader, .replaceResponseBodyText, .setResponseStatus: return true
+        default: return false
+        }
+    }
+
+    /// Whether this shape needs a second (name/find) field alongside value.
+    var hasName: Bool {
+        switch self {
+        case .addRequestHeader, .addResponseHeader, .replaceResponseBodyText: return true
+        default: return false
+        }
+    }
+
+    var nameLabel: String { self == .replaceResponseBodyText ? "FIND" : "HEADER NAME" }
+
+    var valueLabel: String {
+        switch self {
+        case .filterHostContains: return "HOST CONTAINS"
+        case .filterPathContains: return "PATH CONTAINS"
+        case .filterMethod: return "METHOD (e.g. POST)"
+        case .addRequestHeader, .addResponseHeader: return "VALUE"
+        case .filterResponseStatus, .setResponseStatus: return "STATUS CODE"
+        case .replaceResponseBodyText: return "REPLACE WITH"
+        }
+    }
+}
+
+/// Editable draft of one `PipelineStep`. Never crosses the FFI boundary
+/// directly, same reasoning as `RewriteActionDraft`.
+struct PipelineStepDraft: Identifiable, Equatable {
+    let id: UUID
+    var kind: PipelineStepKind
+    var name: String
+    var value: String
+
+    init(kind: PipelineStepKind = .filterHostContains, name: String = "", value: String = "") {
+        self.id = UUID()
+        self.kind = kind
+        self.name = name
+        self.value = value
+    }
+
+    init?(_ step: PipelineStep) {
+        id = UUID()
+        switch step {
+        case .filterHostContains(let value):
+            kind = .filterHostContains; name = ""; self.value = value
+        case .filterPathContains(let value):
+            kind = .filterPathContains; name = ""; self.value = value
+        case .filterMethod(let method):
+            kind = .filterMethod; name = ""; self.value = method
+        case .addRequestHeader(let name, let value):
+            kind = .addRequestHeader; self.name = name; self.value = value
+        case .filterResponseStatus(let status):
+            kind = .filterResponseStatus; name = ""; self.value = String(status)
+        case .addResponseHeader(let name, let value):
+            kind = .addResponseHeader; self.name = name; self.value = value
+        case .replaceResponseBodyText(let find, let replace):
+            kind = .replaceResponseBodyText; name = find; self.value = replace
+        case .setResponseStatus(let status):
+            kind = .setResponseStatus; name = ""; self.value = String(status)
+        }
+    }
+
+    /// `nil` when the draft doesn't have enough to make a valid step yet.
+    func toFFI() -> PipelineStep? {
+        switch kind {
+        case .filterHostContains:
+            return value.isEmpty ? nil : .filterHostContains(value: value)
+        case .filterPathContains:
+            return value.isEmpty ? nil : .filterPathContains(value: value)
+        case .filterMethod:
+            return value.isEmpty ? nil : .filterMethod(method: value)
+        case .addRequestHeader:
+            return name.isEmpty ? nil : .addRequestHeader(name: name, value: value)
+        case .filterResponseStatus:
+            return UInt16(value).map { .filterResponseStatus(status: $0) }
+        case .addResponseHeader:
+            return name.isEmpty ? nil : .addResponseHeader(name: name, value: value)
+        case .replaceResponseBodyText:
+            return name.isEmpty ? nil : .replaceResponseBodyText(find: name, replace: value)
+        case .setResponseStatus:
+            return UInt16(value).map { .setResponseStatus(status: $0) }
+        }
+    }
+}
+
+/// Local display/edit model for a `PipelineRule`, kept separate from the
+/// UniFFI-generated type for the same reason as `CapturedRequestDisplay`.
+struct PipelineRuleDisplay: Identifiable, Equatable, Sendable {
+    var id: String
+    var displayName: String
+    var enabled: Bool
+    var steps: [PipelineStepDraft]
+
+    init(id: String, displayName: String, enabled: Bool, steps: [PipelineStepDraft]) {
+        self.id = id
+        self.displayName = displayName
+        self.enabled = enabled
+        self.steps = steps
+    }
+
+    init(_ rule: PipelineRule) {
+        id = rule.id
+        displayName = rule.displayName
+        enabled = rule.enabled
+        steps = rule.steps.compactMap(PipelineStepDraft.init)
+    }
+
+    func toFFI() -> PipelineRule {
+        PipelineRule(id: id, displayName: displayName, enabled: enabled, steps: steps.compactMap { $0.toFFI() })
+    }
+}
+
+/// Local display model for an `AnalyticsEvent` — the Analytics tab's
+/// cross-session data source. Distinct from `CapturedRequestDisplay`,
+/// which is the live, in-memory-only capture list.
+struct AnalyticsEventDisplay: Identifiable, Sendable {
+    let id = UUID()
+    let timestampMs: Int64
+    let method: String
+    let host: String
+    let statusCode: Int?
+    let durationMs: Int64?
+    let bytesSent: UInt64
+    let bytesReceived: UInt64
+
+    init(_ event: AnalyticsEvent) {
+        timestampMs = event.timestampMs
+        method = event.method
+        host = event.host
+        statusCode = event.statusCode.map(Int.init)
+        durationMs = event.durationMs
+        bytesSent = event.bytesSent
+        bytesReceived = event.bytesReceived
     }
 }

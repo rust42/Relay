@@ -8,7 +8,7 @@
 	</array>
 	<key>com.apple.security.application-groups</key>
 	<array>
-		<string>group.com.sandeep.charlesrs</string>
+		<string>group.com.sandeep.relay</string>
 	</array>
 </dict>
 </plist>

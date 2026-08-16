@@ -1,10 +1,10 @@
 [package]
-name = "charles_core"
+name = "relay_core"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "charles_core"
+name = "relay_core"
 crate-type = ["staticlib", "cdylib", "lib"]
 
 [dependencies]

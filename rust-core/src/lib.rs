@@ -5,8 +5,8 @@ pub mod proxy;
 
 use cert::{CertAuthority, GeneratedCa};
 use model::{
-    BlockRule, CapturedRequest, DnsSpoofRule, FocusSettings, MapLocalRule, MapRemoteRule, MockRule, ProxyState,
-    RewriteRule, ThrottleProfile,
+    AnalyticsEvent, BlockRule, CapturedRequest, DnsSpoofRule, FocusSettings, MapLocalRule, MapRemoteRule, MockRule,
+    PipelineRule, ProxyState, RewriteRule, ThrottleProfile,
 };
 use parking_lot::Mutex;
 use std::path::PathBuf;
@@ -25,7 +25,7 @@ pub enum ProxyError {
 /// CA, the proxy engine task handle, and the list of captured requests
 /// that the SwiftUI layer polls.
 #[derive(uniffi::Object)]
-pub struct CharlesController {
+pub struct RelayController {
     runtime: tokio::runtime::Runtime,
     ca: Arc<CertAuthority>,
     state: Mutex<ProxyState>,
@@ -61,17 +61,27 @@ pub struct CharlesController {
     /// `throttle`, this is a live "what am I looking at" toggle, not a
     /// user-authored asset meant to outlive a session.
     focus: Arc<Mutex<FocusSettings>>,
+    /// Shared with the running `ProxyEngine` and persisted the same way
+    /// `mock_rules` is.
+    pipeline_rules: Arc<Mutex<Vec<PipelineRule>>>,
+    pipeline_rules_path: PathBuf,
     /// Shared with the running `ProxyEngine` the same way `mock_rules` is.
     /// Intentionally *not* persisted to disk — unlike mock rules, this is a
     /// live "current conditions" toggle, not a user-authored asset, and
     /// starting each launch with throttling off is the safer default.
     throttle: Arc<Mutex<ThrottleProfile>>,
+    /// Where `ProxyEngine` appends one compact JSON line per request, and
+    /// where `analytics_events` reads them back from. Append-only, capped
+    /// (see `proxy.rs`'s truncation logic) — not loaded into memory here,
+    /// unlike the rule lists, since it's queried far less often than it's
+    /// written and there's no in-flight state to keep in sync.
+    analytics_path: PathBuf,
     /// `Some` while the proxy is running; dropping/sending stops the accept loop.
     shutdown: Mutex<Option<watch::Sender<bool>>>,
 }
 
 #[uniffi::export]
-impl CharlesController {
+impl RelayController {
     /// `data_dir` is where the root CA PEMs and mock rules are persisted, so
     /// both survive across launches.
     #[uniffi::constructor]
@@ -116,6 +126,14 @@ impl CharlesController {
             .and_then(|s| serde_json::from_str::<Vec<DnsSpoofRule>>(&s).ok())
             .unwrap_or_default();
 
+        let pipeline_rules_path = dir.join("pipeline-rules.json");
+        let pipeline_rules = std::fs::read_to_string(&pipeline_rules_path)
+            .ok()
+            .and_then(|s| serde_json::from_str::<Vec<PipelineRule>>(&s).ok())
+            .unwrap_or_default();
+
+        let analytics_path = dir.join("analytics.jsonl");
+
         Arc::new(Self {
             runtime,
             ca,
@@ -134,7 +152,10 @@ impl CharlesController {
             dns_spoof_rules: Arc::new(Mutex::new(dns_spoof_rules)),
             dns_spoof_rules_path,
             focus: Arc::new(Mutex::new(FocusSettings::default())),
+            pipeline_rules: Arc::new(Mutex::new(pipeline_rules)),
+            pipeline_rules_path,
             throttle: Arc::new(Mutex::new(ThrottleProfile::default())),
+            analytics_path,
             shutdown: Mutex::new(None),
         })
     }
@@ -179,7 +200,9 @@ impl CharlesController {
             self.block_rules.clone(),
             self.dns_spoof_rules.clone(),
             self.focus.clone(),
+            self.pipeline_rules.clone(),
             self.throttle.clone(),
+            self.analytics_path.clone(),
         ));
         let (tx, rx) = watch::channel(false);
         *self.shutdown.lock() = Some(tx);
@@ -299,6 +322,36 @@ impl CharlesController {
 
     pub fn focus(&self) -> FocusSettings {
         self.focus.lock().clone()
+    }
+
+    /// Replaces the full pipeline set and persists it to disk. Same
+    /// live-update mechanism as `set_mock_rules`.
+    pub fn set_pipeline_rules(&self, rules: Vec<PipelineRule>) {
+        *self.pipeline_rules.lock() = rules.clone();
+        if let Ok(json) = serde_json::to_string_pretty(&rules) {
+            let _ = std::fs::write(&self.pipeline_rules_path, json);
+        }
+    }
+
+    pub fn pipeline_rules(&self) -> Vec<PipelineRule> {
+        self.pipeline_rules.lock().clone()
+    }
+
+    /// Most recent Analytics events, newest first, capped at `limit`. Reads
+    /// and parses the whole (size-capped, see `proxy.rs`) log file fresh
+    /// each call rather than keeping an in-memory mirror — simpler, and
+    /// this is queried far less often than it's written.
+    pub fn analytics_events(&self, limit: u32) -> Vec<AnalyticsEvent> {
+        let Ok(content) = std::fs::read_to_string(&self.analytics_path) else {
+            return Vec::new();
+        };
+        let mut events: Vec<AnalyticsEvent> = content
+            .lines()
+            .filter_map(|line| serde_json::from_str(line).ok())
+            .collect();
+        events.reverse();
+        events.truncate(limit as usize);
+        events
     }
 
     /// Takes effect on the next request — same live-update mechanism as

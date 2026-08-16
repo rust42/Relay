@@ -17,7 +17,7 @@ import SystemConfiguration
 @MainActor
 enum SystemProxyConfig {
 
-    private static let backupKey = "CharlesRS.proxyBackup"
+    private static let backupKey = "Relay.proxyBackup"
 
     enum ProxyError: LocalizedError {
         case authorizationFailed(OSStatus)
@@ -137,7 +137,7 @@ enum SystemProxyConfig {
         let authRef = try authorization()
 
         guard let prefs = SCPreferencesCreateWithAuthorization(
-            nil, "CharlesRS" as CFString, nil, authRef
+            nil, "Relay" as CFString, nil, authRef
         ) else {
             throw ProxyError.preferencesUnavailable
         }

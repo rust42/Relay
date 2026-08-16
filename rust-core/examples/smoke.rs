@@ -3,16 +3,16 @@
 //!   cargo run --release --example smoke -- <data-dir> <port>
 //!
 //! Then point a client at it, e.g.
-//!   curl -x http://127.0.0.1:8899 --cacert <data-dir>/charlesrs-ca.pem https://example.com
+//!   curl -x http://127.0.0.1:8899 --cacert <data-dir>/relay-ca.pem https://example.com
 //!
 //! Prints one line per captured request as they arrive.
 
-use charles_core::model::{MockRule, ThrottleProfile};
-use charles_core::CharlesController;
+use relay_core::model::{MockRule, ThrottleProfile};
+use relay_core::RelayController;
 
 fn main() {
     let mut args = std::env::args().skip(1);
-    let data_dir = args.next().unwrap_or_else(|| "/tmp/charlesrs-smoke".into());
+    let data_dir = args.next().unwrap_or_else(|| "/tmp/relay-smoke".into());
     let port: u16 = args
         .next()
         .and_then(|p| p.parse().ok())
@@ -22,7 +22,7 @@ fn main() {
     let with_throttle = mode.as_deref() == Some("--throttle");
     let with_loss = mode.as_deref() == Some("--loss");
 
-    let controller = CharlesController::new(data_dir.clone());
+    let controller = RelayController::new(data_dir.clone());
 
     if with_throttle {
         controller.set_throttle_profile(ThrottleProfile {
@@ -56,9 +56,9 @@ fn main() {
                 function onResponse(req, res) {
                     var data = JSON.parse(res.body);
                     data.mocked = true;
-                    data.injectedBy = "CharlesRS";
+                    data.injectedBy = "Relay";
                     res.body = JSON.stringify(data);
-                    res.headers["X-Mocked-By"] = "CharlesRS";
+                    res.headers["X-Mocked-By"] = "Relay";
                     return res;
                 }
             "#.into(),
@@ -69,7 +69,7 @@ fn main() {
 
     controller.start(port).expect("proxy failed to start");
     println!("proxy listening on 127.0.0.1:{port}");
-    println!("ca cert: {data_dir}/charlesrs-ca.pem");
+    println!("ca cert: {data_dir}/relay-ca.pem");
     println!("state: {:?}", controller.state());
 
     let mut seen = 0usize;

@@ -3,6 +3,7 @@ import SwiftUI
 struct ToolsView: View {
     @EnvironmentObject var proxyModel: ProxyModel
     @StateObject private var logStreamer = SimulatorLogStreamer()
+    @StateObject private var toolbox = SimToolboxModel()
     @State private var devices: [SimDevice] = []
     @State private var selectedDeviceID: String?
     @State private var deepLinkURL = ""
@@ -10,6 +11,8 @@ struct ToolsView: View {
     @State private var actionInFlight = false
     @State private var toolsError: String?
     @State private var caJustInstalled = false
+    @State private var toolboxTab: SimToolboxTab = .general
+    @State private var showCreateDevice = false
 
     private var selectedDevice: SimDevice? {
         devices.first { $0.id == selectedDeviceID }
@@ -51,6 +54,9 @@ struct ToolsView: View {
                 actionInFlight: actionInFlight,
                 routingMode: proxyModel.routingMode,
                 caJustInstalled: caJustInstalled,
+                toolbox: toolbox,
+                tab: $toolboxTab,
+                showCreateDevice: $showCreateDevice,
                 onInstallRootCA: {
                     await runAction { udid in
                         try await SimulatorControl.installRootCA(pemPath: proxyModel.rootCAPath, on: udid)
@@ -62,7 +68,8 @@ struct ToolsView: View {
                 },
                 onClearSafariCache: { await runAction { try await SimulatorControl.clearSafariCache(on: $0) } },
                 onResetPermissions: { await runAction { try await SimulatorControl.resetPrivacy(on: $0) } },
-                onToggleAppearance: { dark in await runAction { try await SimulatorControl.setAppearance(dark: dark, on: $0) } }
+                onToggleAppearance: { dark in await runAction { try await SimulatorControl.setAppearance(dark: dark, on: $0) } },
+                onRefreshDevices: { devices = await SimulatorControl.listDevices() }
             )
             .frame(width: 320)
             .frame(maxHeight: .infinity)
@@ -76,9 +83,18 @@ struct ToolsView: View {
         .onChange(of: selectedDeviceID) { _, newValue in
             guard let newValue else { logStreamer.stop(); return }
             logStreamer.start(udid: newValue)
+            toolbox.apps = []
         }
         .onDisappear { logStreamer.stop() }
-        .alert("CharlesRS", isPresented: Binding(
+        .sheet(isPresented: $showCreateDevice) {
+            CreateDeviceSheet(toolbox: toolbox) { newUDID in
+                Task {
+                    devices = await SimulatorControl.listDevices()
+                    selectedDeviceID = newUDID
+                }
+            }
+        }
+        .alert("Relay", isPresented: Binding(
             get: { toolsError != nil },
             set: { if !$0 { toolsError = nil } }
         )) {
@@ -86,6 +102,27 @@ struct ToolsView: View {
         } message: {
             Text(toolsError ?? "")
         }
+        .alert("Relay", isPresented: Binding(
+            get: { toolbox.error != nil },
+            set: { if !$0 { toolbox.error = nil } }
+        )) {
+            Button("OK", role: .cancel) { toolbox.error = nil }
+        } message: {
+            Text(toolbox.error ?? "")
+        }
+        .overlay(alignment: .bottom) {
+            if let toast = toolbox.toast {
+                Text(toast)
+                    .font(.system(size: 11, weight: .semibold))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 7)
+                    .background(.black.opacity(0.85), in: Capsule())
+                    .padding(.bottom, 16)
+                    .transition(.move(edge: .bottom).combined(with: .opacity))
+            }
+        }
+        .animation(.spring(response: 0.3, dampingFraction: 0.8), value: toolbox.toast)
     }
 
     private func triggerDeepLink() {
@@ -363,15 +400,19 @@ struct SimulatorManagementCard: View {
     let actionInFlight: Bool
     let routingMode: RoutingMode
     let caJustInstalled: Bool
+    @ObservedObject var toolbox: SimToolboxModel
+    @Binding var tab: SimToolboxTab
+    @Binding var showCreateDevice: Bool
     let onInstallRootCA: () async -> Void
     let onClearSafariCache: () async -> Void
     let onResetPermissions: () async -> Void
     let onToggleAppearance: (Bool) async -> Void
+    let onRefreshDevices: () async -> Void
 
     private var selectedDevice: SimDevice? { devices.first { $0.id == selectedDeviceID } }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 12) {
             Text("SIMULATOR MANAGEMENT")
                 .font(.system(size: 10.5, weight: .bold))
                 .tracking(0.6)
@@ -405,42 +446,36 @@ struct SimulatorManagementCard: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .background(.white.opacity(0.04), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Button {
-                        Task { await onInstallRootCA() }
-                    } label: {
-                        Label(caJustInstalled ? "Certificate Installed" : "Install Root Certificate",
-                              systemImage: caJustInstalled ? "checkmark.circle.fill" : "checkmark.seal")
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .buttonStyle(GlassButtonStyle(prominent: caJustInstalled, tint: Theme.methodColor("POST")))
-                    .disabled(actionInFlight || !device.isBooted)
-                    .opacity(device.isBooted ? 1 : 0.5)
+                SimToolboxTabBar(selected: $tab)
 
-                    if routingMode != .systemWide {
-                        Label("Simulator traffic needs System-wide routing (it shares the Mac's network stack, so there's no per-app flag like Chrome uses). Switch it in the routing popover.", systemImage: "exclamationmark.triangle.fill")
-                            .font(.system(size: 10))
-                            .foregroundStyle(.orange)
-                    }
-                }
-
-                VStack(spacing: 6) {
-                    actionButton("Clear Safari Cache", icon: "trash", action: onClearSafariCache)
-                    actionButton("Reset Permissions", icon: "arrow.counterclockwise", action: onResetPermissions)
-                    HStack(spacing: 6) {
-                        Button { Task { await onToggleAppearance(false) } } label: {
-                            Label("Light", systemImage: "sun.max.fill").frame(maxWidth: .infinity)
+                ScrollView {
+                    Group {
+                        switch tab {
+                        case .general:
+                            GeneralToolsPanel(
+                                device: device, actionInFlight: actionInFlight, routingMode: routingMode,
+                                caJustInstalled: caJustInstalled, toolbox: toolbox,
+                                onInstallRootCA: onInstallRootCA, onClearSafariCache: onClearSafariCache,
+                                onResetPermissions: onResetPermissions, onToggleAppearance: onToggleAppearance
+                            )
+                        case .apps:
+                            AppsToolsPanel(device: device, toolbox: toolbox)
+                        case .privacy:
+                            PrivacyToolsPanel(device: device, toolbox: toolbox)
+                        case .location:
+                            LocationToolsPanel(device: device, toolbox: toolbox)
+                        case .statusBar:
+                            StatusBarToolsPanel(device: device, toolbox: toolbox)
+                        case .push:
+                            PushToolsPanel(device: device, toolbox: toolbox)
+                        case .media:
+                            MediaToolsPanel(device: device, toolbox: toolbox)
                         }
-                        .buttonStyle(GlassButtonStyle())
-                        Button { Task { await onToggleAppearance(true) } } label: {
-                            Label("Dark", systemImage: "moon.fill").frame(maxWidth: .infinity)
-                        }
-                        .buttonStyle(GlassButtonStyle())
                     }
-                    .disabled(actionInFlight || !device.isBooted)
+                    .disabled(actionInFlight || toolbox.busy)
                 }
-                .disabled(actionInFlight || !device.isBooted)
-                .opacity(device.isBooted ? 1 : 0.5)
+                .scrollIndicators(.hidden)
+                .frame(maxHeight: .infinity)
 
                 if !device.isBooted {
                     Label("Boot this simulator to run actions on it.", systemImage: "info.circle")
@@ -451,10 +486,17 @@ struct SimulatorManagementCard: View {
 
             Divider().overlay(Theme.hairline)
 
-            Text("AVAILABLE DEVICES")
-                .font(.system(size: 8.5, weight: .bold))
-                .tracking(0.4)
-                .foregroundStyle(Theme.textTertiary)
+            HStack {
+                Text("AVAILABLE DEVICES")
+                    .font(.system(size: 8.5, weight: .bold))
+                    .tracking(0.4)
+                    .foregroundStyle(Theme.textTertiary)
+                Spacer()
+                Button { showCreateDevice = true } label: {
+                    Image(systemName: "plus.circle")
+                }
+                .buttonStyle(GlassIconButtonStyle())
+            }
 
             if devices.isEmpty {
                 Text("No simulators found.")
@@ -467,26 +509,38 @@ struct SimulatorManagementCard: View {
                             DeviceRow(device: device, isSelected: device.id == selectedDeviceID) {
                                 selectedDeviceID = device.id
                             }
+                            .contextMenu {
+                                Button(device.isBooted ? "Shutdown" : "Boot") {
+                                    Task {
+                                        try? await (device.isBooted ? SimulatorControl.shutdown(udid: device.udid) : SimulatorControl.boot(udid: device.udid))
+                                        await onRefreshDevices()
+                                    }
+                                }
+                                Button("Clone…") {
+                                    Task {
+                                        try? await SimulatorControl.cloneDevice(udid: device.udid, newName: "\(device.name) copy")
+                                        await onRefreshDevices()
+                                    }
+                                }
+                                Divider()
+                                Button("Delete", role: .destructive) {
+                                    Task {
+                                        try? await SimulatorControl.deleteDevice(udid: device.udid)
+                                        if selectedDeviceID == device.id { selectedDeviceID = nil }
+                                        await onRefreshDevices()
+                                    }
+                                }
+                            }
                         }
                     }
                 }
                 .scrollIndicators(.hidden)
+                .frame(maxHeight: 150)
             }
-
-            Spacer(minLength: 0)
         }
         .padding(14)
         .frame(maxHeight: .infinity)
         .glassPanel(cornerRadius: 10)
-    }
-
-    private func actionButton(_ title: String, icon: String, action: @escaping () async -> Void) -> some View {
-        Button {
-            Task { await action() }
-        } label: {
-            Label(title, systemImage: icon).frame(maxWidth: .infinity, alignment: .leading)
-        }
-        .buttonStyle(GlassButtonStyle())
     }
 }
 
