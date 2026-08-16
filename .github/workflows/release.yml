@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    name: Build universal app + publish GitHub Release
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: Build universal (arm64 + x86_64) app, ad-hoc signed
+        run: bazel build //Swift/CharlesRSApp:CharlesRS --macos_cpus=arm64,x86_64 -c opt
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          VERSION="${GITHUB_REF_NAME:-dev}"
+          STAGE="$(mktemp -d)"
+          unzip -q bazel-bin/Swift/CharlesRSApp/CharlesRS.zip -d "$STAGE"
+          codesign -dv "$STAGE/CharlesRS.app"
+          DIST="$PWD/dist"
+          mkdir -p "$DIST"
+          ditto -c -k --sequesterRsrc --keepParent "$STAGE/CharlesRS.app" "$DIST/CharlesRS-$VERSION-macos-universal.zip"
+          echo "ARTIFACT=$DIST/CharlesRS-$VERSION-macos-universal.zip" >> "$GITHUB_ENV"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="dev-${GITHUB_SHA::7}"
+          fi
+          gh release create "$TAG" "$ARTIFACT" \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "CharlesRS $TAG" \
+            --generate-notes \
+            --notes "Ad-hoc signed build, no Apple Developer team. Gatekeeper will warn on first launch (right-click > Open, or \`xattr -d com.apple.quarantine CharlesRS.app\`)." \
+            $([ "${GITHUB_REF_TYPE}" = "tag" ] || echo "--prerelease")

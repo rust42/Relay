@@ -1,0 +1,10 @@
+# The Rust build (rust-core/BUILD.bazel) shells out to `cargo`, which is not
+# hermetic under Bazel: it needs the user's toolchain and network access to
+# fetch crates. These action_env entries forward what cargo needs from the
+# invoking shell into genrule actions tagged "local".
+build --action_env=HOME
+build --action_env=PATH
+build --action_env=CARGO_HOME
+
+build --apple_platform_type=macos
+build --macos_minimum_os=14.0

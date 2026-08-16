@@ -1,0 +1,35 @@
+# macOS
+.DS_Store
+
+# Xcode / Tuist generated project (regenerate with `tuist generate`)
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcuserstate
+*.xcscmblueprint
+.tuist-bin/
+.tuist/
+Tuist/.build/
+
+# Rust
+rust-core/target/
+rust-core/generated/
+
+# Bazel
+bazel-*
+/bazel-bin
+/bazel-out
+/bazel-testlogs
+/bazel-CharlesRS
+.bazel-cache/
+
+# CI / build artifacts
+build/
+Derived/
+*.dmg
+*.zip
+*.ipa
+
+# Claude Code local (personal permission overrides, not shared)
+.claude/settings.local.json

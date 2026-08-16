@@ -1,0 +1,55 @@
+load("@rules_cc//cc:defs.bzl", "cc_library")
+load("@build_bazel_rules_swift//swift:swift_interop_hint.bzl", "swift_interop_hint")
+
+# Builds rust-core via cargo (arm64 + x86_64 -> lipo universal static lib) and
+# regenerates the UniFFI Swift bindings. Not hermetic (needs network to fetch
+# crates and the host's rustup toolchain), hence the "local"/"requires-network"
+# tags -- see //bazel:build_rust_core.sh and .bazelrc.
+genrule(
+    name = "rust_core_build",
+    srcs = glob([
+        "src/**/*.rs",
+        "examples/**/*.rs",
+        "Cargo.toml",
+        "Cargo.lock",
+    ]),
+    outs = [
+        "target/universal/libcharles_core.a",
+        "generated/swift/charles_core.swift",
+        "generated/swift/charles_coreFFI.h",
+    ],
+    cmd = """
+        $(execpath //bazel:build_rust_core.sh) \
+            $(RULEDIR)/target/universal/libcharles_core.a \
+            $(RULEDIR)/generated/swift/charles_core.swift \
+            $(RULEDIR)/generated/swift/charles_coreFFI.h
+    """,
+    tools = ["//bazel:build_rust_core.sh"],
+    tags = [
+        "local",
+        "no-remote-exec",
+        "no-sandbox",
+        "requires-network",
+    ],
+    visibility = ["//visibility:public"],
+)
+
+cc_library(
+    name = "charles_coreFFI",
+    hdrs = ["generated/swift/charles_coreFFI.h"],
+    aspect_hints = [":charles_coreFFI_interop_hint"],
+    visibility = ["//visibility:public"],
+)
+
+swift_interop_hint(
+    name = "charles_coreFFI_interop_hint",
+    module_name = "charles_coreFFI",
+)
+
+cc_library(
+    name = "charles_core_static",
+    srcs = ["target/universal/libcharles_core.a"],
+    linkstatic = True,
+    alwayslink = True,
+    visibility = ["//visibility:public"],
+)

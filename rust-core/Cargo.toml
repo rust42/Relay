@@ -1,0 +1,46 @@
+[package]
+name = "charles_core"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "charles_core"
+crate-type = ["staticlib", "cdylib", "lib"]
+
+[dependencies]
+tokio = { version = "1", features = ["rt-multi-thread", "net", "io-util", "macros", "sync", "time", "process", "fs"] }
+hyper = { version = "1", features = ["full"] }
+hyper-util = { version = "0.1", features = ["full"] }
+http-body-util = "0.1"
+tokio-rustls = "0.26"
+rustls = "0.23"
+rustls-pemfile = "2"
+webpki-roots = "1"
+flate2 = "1"
+hyper-rustls = { version = "0.27", default-features = false, features = [
+    "webpki-roots",
+    "http1",
+    "tls12",
+    "logging",
+    "aws-lc-rs",
+] }
+rcgen = { version = "0.14", features = ["x509-parser"] }
+time = "0.3"
+uuid = { version = "1", features = ["v4"] }
+uniffi = { version = "0.28", features = ["cli"] }
+parking_lot = "0.12"
+bytes = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+anyhow = "1"
+thiserror = "2"
+base64 = "0.22"
+boa_engine = "0.21.1"
+rand = "0.10.2"
+
+[build-dependencies]
+uniffi = { version = "0.28", features = ["build"] }
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/bin/uniffi-bindgen.rs"

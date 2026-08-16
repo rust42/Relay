@@ -1,0 +1,49 @@
+name: PR
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+concurrency:
+  group: pr-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tuist-generate:
+    name: Tuist manifest check
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Tuist
+        run: brew install --quiet tuist
+      - name: Generate Xcode project
+        run: tuist generate --no-open
+
+  bazel-build:
+    name: Bazel build
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Set up Bazel
+        uses: bazel-contrib/setup-bazel@0.19.0
+        with:
+          bazelisk-cache: true
+          disk-cache: ${{ github.workflow }}
+          repository-cache: true
+
+      - name: bazel build //Swift/CharlesRSApp:CharlesRS
+        run: bazel build //Swift/CharlesRSApp:CharlesRS
+
+      - name: Smoke-check the app bundle
+        run: |
+          rm -rf /tmp/CharlesRS-check
+          mkdir -p /tmp/CharlesRS-check
+          unzip -q bazel-bin/Swift/CharlesRSApp/CharlesRS.zip -d /tmp/CharlesRS-check
+          codesign -dv /tmp/CharlesRS-check/CharlesRS.app
