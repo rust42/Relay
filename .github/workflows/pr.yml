@@ -17,16 +17,26 @@ jobs:
       - uses: actions/checkout@v4
       - name: Install Tuist
         run: brew install --quiet tuist
-      - name: Stub the Rust-generated bindings
-        # rust-core/generated/ is gitignored — it's normally produced by
-        # scripts/build-rust.sh as an Xcode pre-build step, which doesn't run
-        # for `tuist generate` on its own. This job only checks the Tuist
-        # manifest itself (the Bazel job below does the real Rust build), so
-        # a placeholder is enough to satisfy Tuist's source-glob and library
-        # dependency validation at generate time.
+      - name: Stub the Rust-generated bindings and static library
+        # rust-core/generated/ and rust-core/target/ are gitignored — both
+        # are normally produced by scripts/build-rust.sh as an Xcode
+        # pre-build step, which doesn't run for `tuist generate` on its own.
+        # This job only checks the Tuist manifest itself (the Bazel job
+        # below does the real Rust build), so placeholders are enough —
+        # but Tuist inspects the .a for real Mach-O/architecture metadata
+        # (not just that the file exists), so an empty stub isn't enough;
+        # it has to be a real, if empty, universal static archive.
         run: |
           mkdir -p rust-core/generated/swift
           touch rust-core/generated/swift/module.modulemap
+
+          mkdir -p rust-core/target/universal
+          echo 'static int _relay_core_placeholder = 0;' > /tmp/placeholder.c
+          clang -c /tmp/placeholder.c -o /tmp/placeholder_arm64.o -target arm64-apple-macos14.0
+          clang -c /tmp/placeholder.c -o /tmp/placeholder_x86_64.o -target x86_64-apple-macos14.0
+          ar rcs /tmp/librelay_core_arm64.a /tmp/placeholder_arm64.o
+          ar rcs /tmp/librelay_core_x86_64.a /tmp/placeholder_x86_64.o
+          lipo -create /tmp/librelay_core_arm64.a /tmp/librelay_core_x86_64.a -output rust-core/target/universal/librelay_core.a
       - name: Generate Xcode project
         run: tuist generate --no-open
 
